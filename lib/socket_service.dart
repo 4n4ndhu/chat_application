@@ -1,4 +1,5 @@
 import 'package:socket_io_client/socket_io_client.dart' as IO;
+import 'package:uuid/uuid.dart';
 
 class User {
   final String id;
@@ -14,26 +15,39 @@ class User {
 
 class Message {
   final String senderName;
-  final String text;
+  final String? text;
+  final String? audioBase64;
   final bool isMine;
   DateTime timestamp;
+  final String id;
 
-  Message(this.senderName, this.text, {required this.isMine})
-      : timestamp = DateTime.now();
+  Message({
+    required this.senderName,
+    this.text,
+    this.audioBase64,
+    required this.isMine,
+    required this.id,
+  }) : timestamp = DateTime.now();
+
+  bool get isAudio => audioBase64 != null;
 
   factory Message.fromJson(Map<String, dynamic> json) {
     return Message(
-      json['senderName'],
-      json['text'],
+      senderName: json['senderName'],
+      text: json['text'],
+      audioBase64: json['audioBase64'],
       isMine: json['isMine'],
+      id: json['id'] ?? const Uuid().v4(),
     )..timestamp = DateTime.parse(json['timestamp']);
   }
 
   Map<String, dynamic> toJson() => {
         'senderName': senderName,
         'text': text,
+        'audioBase64': audioBase64,
         'isMine': isMine,
         'timestamp': timestamp.toIso8601String(),
+        'id': id,
       };
 }
 
@@ -49,7 +63,7 @@ class SocketService {
   Function()? onMessagesUpdated;
 
   void connect(String userName) {
-    socket = IO.io('http://192.168.220.33:3000', <String, dynamic>{
+    socket = IO.io('http://192.168.220.34:3000', <String, dynamic>{
       'transports': ['websocket'],
       'autoConnect': false,
     });
@@ -73,11 +87,18 @@ class SocketService {
 
     socket.on('private_message', (data) {
       final from = User.fromJson(data['from']);
-      final message = data['message'] as String;
+      final message = data['message'] as String?;
+      final audioBase64 = data['audioBase64'] as String?;
 
       _addMessage(
         from.id,
-        Message(from.name, message, isMine: false),
+        Message(
+          senderName: from.name,
+          text: message,
+          audioBase64: audioBase64,
+          isMine: false,
+          id: data['id'] ?? const Uuid().v4(),
+        ),
         markUnread: true,
       );
     });
@@ -98,16 +119,30 @@ class SocketService {
     onMessagesUpdated?.call();
   }
 
-  void sendPrivateMessage(User to, String message) {
+  void sendPrivateMessage({
+    required User to,
+    String? message,
+    String? audioBase64,
+  }) {
+    final messageId = const Uuid().v4();
+
     socket.emit('private_message', {
       'to': to.toJson(),
       'message': message,
+      'audioBase64': audioBase64,
       'from': currentUser.toJson(),
+      'id': messageId,
     });
 
     _addMessage(
       to.id,
-      Message(currentUser.name, message, isMine: true),
+      Message(
+        senderName: currentUser.name,
+        text: message,
+        audioBase64: audioBase64,
+        isMine: true,
+        id: messageId,
+      ),
       markUnread: false,
     );
   }
@@ -118,6 +153,7 @@ class SocketService {
   }
 
   void dispose() {
+    socket.disconnect();
     socket.dispose();
   }
 }
