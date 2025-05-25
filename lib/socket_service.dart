@@ -63,7 +63,7 @@ class SocketService {
   Function()? onMessagesUpdated;
 
   void connect(String userName) {
-    socket = IO.io('http://192.168.220.34:3000', <String, dynamic>{
+    socket = IO.io('http://62.72.31.17:3002', <String, dynamic>{
       'transports': ['websocket'],
       'autoConnect': false,
     });
