@@ -71,10 +71,15 @@ class SocketService {
     socket.connect();
 
     socket.onConnect((_) {
-      print('Connected to server');
-      currentUser = User(id: socket.id!, name: userName);
-      socket.emit('join', currentUser.toJson());
-    });
+  final socketId = socket.id;
+  if (socketId != null) {
+    currentUser = User(id: socketId, name: userName);
+    socket.emit('join', currentUser.toJson());
+  } else {
+    print('Socket ID is null!');
+  }
+});
+
 
     socket.on('user_list', (data) {
       final users = (data as List)
