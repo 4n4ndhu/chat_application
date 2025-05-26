@@ -171,14 +171,22 @@ class _ChatScreenState extends State<ChatScreen> {
               itemCount: messages.length,
               itemBuilder: (_, index) {
                 final msg = messages[messages.length - 1 - index];
+                final prevmsg = index + 1 < messages.length
+                    ? messages[messages.length - 1 - (index + 1)]
+                    : null;
+                final isSameSender =
+                    prevmsg != null && msg.isMine == prevmsg.isMine;
                 return Align(
                   alignment:
                       msg.isMine ? Alignment.centerRight : Alignment.centerLeft,
                   child: Container(
-                    margin: EdgeInsets.symmetric(vertical: 2, horizontal: 8),
-                    padding: EdgeInsets.all(10),
+                    margin: EdgeInsets.only(
+                        top: isSameSender ? 2 : 10,
+                        left: msg.isMine ? 40 : 20,
+                        right: msg.isMine ? 20 : 40),
+                    padding: EdgeInsets.symmetric(vertical: 8, horizontal: 10),
                     decoration: BoxDecoration(
-                      color: msg.isMine ? Colors.blue[200] : Colors.grey[300],
+                      color: msg.isMine ? Colors.green[200] : Colors.grey[300],
                       borderRadius: BorderRadius.circular(8),
                     ),
                     child: msg.isAudio
@@ -192,6 +200,7 @@ class _ChatScreenState extends State<ChatScreen> {
           Padding(
             padding: EdgeInsets.all(8),
             child: Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
               children: [
                 IconButton(
                   icon: Icon(isRecording ? Icons.stop : Icons.mic),
@@ -201,8 +210,13 @@ class _ChatScreenState extends State<ChatScreen> {
                 Expanded(
                   child: TextField(
                     controller: _controller,
-                    decoration: InputDecoration(hintText: 'Type a message'),
-                    onSubmitted: (_) => _sendTextMessage(),
+                    maxLines: 5,
+                    minLines: 1,
+                    decoration: InputDecoration(
+                        border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(20)),
+                        hintText: 'Type a message'),
+                    // onSubmitted: (_) => _sendTextMessage(),
                   ),
                 ),
                 IconButton(
