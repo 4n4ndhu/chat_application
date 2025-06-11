@@ -1,4 +1,5 @@
 import 'package:chat_application/chat_screen.dart';
+import 'package:chat_application/incoming_call_screen.dart';
 import 'package:chat_application/socket_service.dart';
 import 'package:flutter/material.dart';
 
@@ -9,16 +10,19 @@ void main() {
 class MyApp extends StatelessWidget {
   final String myUserName =
       "User_${DateTime.now().millisecondsSinceEpoch % 1000}";
+  // final String serverUrl = "http://62.72.31.17:3002"; // Your server URL
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
-      title: 'Multi-User Chat',
+      title: 'Multi-User Chat with Calls',
       theme: ThemeData(
         primarySwatch: Colors.blue,
       ),
-      home: UserListScreen(myUserName: myUserName),
+      home: UserListScreen(
+        myUserName: myUserName,
+      ),
     );
   }
 }
@@ -26,7 +30,9 @@ class MyApp extends StatelessWidget {
 class UserListScreen extends StatefulWidget {
   final String myUserName;
 
-  UserListScreen({required this.myUserName});
+  UserListScreen({
+    required this.myUserName,
+  });
 
   @override
   _UserListScreenState createState() => _UserListScreenState();
@@ -35,14 +41,32 @@ class UserListScreen extends StatefulWidget {
 class _UserListScreenState extends State<UserListScreen> {
   late SocketService socketService;
 
+  // In initState() of _UserListScreenState:
   @override
   void initState() {
     super.initState();
     socketService = SocketService();
-    socketService.connect(widget.myUserName);
+    socketService.connect(
+      widget.myUserName,
+    );
+
     socketService.onUserListUpdated = (List<User> users) {
+      if (mounted) setState(() {});
+    };
+
+    // Add this incoming call listener
+    socketService.onIncomingCall = (data) {
       if (mounted) {
-        setState(() {});
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => IncomingCallScreen(
+              socketService: socketService,
+              caller: User.fromJson(data['from']),
+              isVideoCall: data['isVideo'],
+            ),
+          ),
+        );
       }
     };
   }

@@ -2,17 +2,23 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:convert';
 import 'package:audioplayers/audioplayers.dart';
+import 'package:chat_application/incoming_call_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:audio_session/audio_session.dart' as audio_session;
 import 'package:record/record.dart';
 import 'socket_service.dart';
+import 'call_screen.dart';
 
 class ChatScreen extends StatefulWidget {
   final SocketService socketService;
   final User otherUser;
 
-  ChatScreen({required this.socketService, required this.otherUser});
+  const ChatScreen({
+    Key? key,
+    required this.socketService,
+    required this.otherUser,
+  }) : super(key: key);
 
   @override
   _ChatScreenState createState() => _ChatScreenState();
@@ -20,7 +26,7 @@ class ChatScreen extends StatefulWidget {
 
 class _ChatScreenState extends State<ChatScreen> {
   final TextEditingController _controller = TextEditingController();
-  final List<Message> messages = [];
+  final ScrollController _scrollController = ScrollController();
   final AudioPlayer audioPlayer = AudioPlayer();
   late final AudioRecorder audioRecorder;
   bool isRecording = false;
@@ -32,22 +38,52 @@ class _ChatScreenState extends State<ChatScreen> {
     super.initState();
     audioRecorder = AudioRecorder();
     _initAudioSession();
+    _loadMessages();
+    _setupSocketListeners();
+  }
 
-    final rawList = widget.socketService.messagesByUserId[widget.otherUser.id];
-    if (rawList != null) {
-      messages.addAll(rawList);
+  @override
+  void dispose() {
+    _controller.dispose();
+    _scrollController.dispose();
+    audioPlayer.dispose();
+    audioRecorder.dispose();
+    super.dispose();
+  }
+
+  void _loadMessages() {
+    final messages = widget.socketService.messagesByUserId[widget.otherUser.id];
+    if (messages != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _scrollToBottom();
+      });
     }
+  }
 
+  void _setupSocketListeners() {
     widget.socketService.onMessagesUpdated = () {
+      if (mounted) setState(() {});
+      _scrollToBottom();
+    };
+
+    widget.socketService.onNewMessage = (userId) {
+      if (userId == widget.otherUser.id && mounted) {
+        _scrollToBottom();
+      }
+    };
+
+    widget.socketService.onIncomingCall = (data) {
       if (mounted) {
-        setState(() {
-          messages.clear();
-          final updatedList =
-              widget.socketService.messagesByUserId[widget.otherUser.id];
-          if (updatedList != null) {
-            messages.addAll(updatedList);
-          }
-        });
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => IncomingCallScreen(
+              socketService: widget.socketService,
+              caller: User.fromJson(data['from']),
+              isVideoCall: data['isVideo'],
+            ),
+          ),
+        );
       }
     };
   }
@@ -73,12 +109,14 @@ class _ChatScreenState extends State<ChatScreen> {
     ));
   }
 
-  @override
-  void dispose() {
-    _controller.dispose();
-    audioPlayer.dispose();
-    audioRecorder.dispose();
-    super.dispose();
+  void _scrollToBottom() {
+    if (_scrollController.hasClients) {
+      _scrollController.animateTo(
+        _scrollController.position.maxScrollExtent,
+        duration: Duration(milliseconds: 300),
+        curve: Curves.easeOut,
+      );
+    }
   }
 
   void _sendTextMessage() {
@@ -90,25 +128,28 @@ class _ChatScreenState extends State<ChatScreen> {
       message: text,
     );
     _controller.clear();
+    _scrollToBottom();
   }
 
   Future<void> _startRecording() async {
     try {
       if (await Permission.microphone.request().isGranted) {
         final tempDir = await Directory.systemTemp.createTemp();
-        _recordingPath = '${tempDir.path}/recording.m4a';
+        _recordingPath =
+            '${tempDir.path}/recording_${DateTime.now().millisecondsSinceEpoch}.m4a';
 
         await audioRecorder.start(
-          RecordConfig(),
+          RecordConfig(encoder: AudioEncoder.aacLc),
           path: _recordingPath!,
         );
 
-        setState(() {
-          isRecording = true;
-        });
+        setState(() => isRecording = true);
       }
     } catch (e) {
       print('Error starting recording: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to start recording: $e')),
+      );
     }
   }
 
@@ -117,7 +158,7 @@ class _ChatScreenState extends State<ChatScreen> {
       final path = await audioRecorder.stop();
       setState(() => isRecording = false);
 
-      if (path != null) {
+      if (path != null && mounted) {
         final audioFile = File(path);
         final audioBytes = await audioFile.readAsBytes();
         final audioBase64 = base64Encode(audioBytes);
@@ -131,6 +172,11 @@ class _ChatScreenState extends State<ChatScreen> {
       }
     } catch (e) {
       print('Error stopping recording: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to send recording: $e')),
+        );
+      }
     }
   }
 
@@ -148,6 +194,9 @@ class _ChatScreenState extends State<ChatScreen> {
       print('Error playing audio: $e');
       if (mounted) {
         setState(() => currentPlayingId = null);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to play audio: $e')),
+        );
       }
     }
   }
@@ -159,85 +208,136 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
+  void _makeVoiceCall() {
+    widget.socketService.initiateCall(widget.otherUser, false);
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => CallScreen(
+          socketService: widget.socketService,
+          isVideo: false,
+          otherUser: widget.otherUser,
+          isCaller: true,
+        ),
+      ),
+    );
+  }
+
+  void _makeVideoCall() {
+    widget.socketService.initiateCall(widget.otherUser, true);
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => CallScreen(
+          socketService: widget.socketService,
+          isVideo: true,
+          otherUser: widget.otherUser,
+          isCaller: true,
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    final messages =
+        widget.socketService.messagesByUserId[widget.otherUser.id] ?? [];
+
     return Scaffold(
-      appBar: AppBar(title: Text('Chat with ${widget.otherUser.name}')),
+      appBar: AppBar(
+        title: Text(widget.otherUser.name),
+        actions: [
+          IconButton(
+            icon: Icon(Icons.call),
+            onPressed: _makeVoiceCall,
+          ),
+          IconButton(
+            icon: Icon(Icons.videocam),
+            onPressed: _makeVideoCall,
+          ),
+        ],
+      ),
       body: Column(
         children: [
           Expanded(
             child: ListView.builder(
-              reverse: true,
+              controller: _scrollController,
+              padding: EdgeInsets.all(8),
               itemCount: messages.length,
-              itemBuilder: (_, index) {
-                final msg = messages[messages.length - 1 - index];
-                final prevmsg = index + 1 < messages.length
-                    ? messages[messages.length - 1 - (index + 1)]
-                    : null;
-                final isSameSender =
-                    prevmsg != null && msg.isMine == prevmsg.isMine;
-                return Align(
-                  alignment:
-                      msg.isMine ? Alignment.centerRight : Alignment.centerLeft,
-                  child: Container(
-                    margin: EdgeInsets.only(
-                        top: isSameSender ? 2 : 10,
-                        left: msg.isMine ? 40 : 20,
-                        right: msg.isMine ? 20 : 40),
-                    padding: EdgeInsets.symmetric(vertical: 8, horizontal: 10),
-                    decoration: BoxDecoration(
-                      color: msg.isMine ? Colors.green[200] : Colors.grey[300],
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: msg.isAudio
-                        ? _buildAudioMessage(msg)
-                        : Text(msg.text ?? ''),
-                  ),
-                );
+              itemBuilder: (context, index) {
+                final message = messages[index];
+                return _buildMessageBubble(message);
               },
             ),
           ),
-          Padding(
-            padding: EdgeInsets.all(8),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                IconButton(
-                  icon: Icon(isRecording ? Icons.stop : Icons.mic),
-                  onPressed: isRecording ? _stopRecording : _startRecording,
-                  color: isRecording ? Colors.red : null,
-                ),
-                Expanded(
-                  child: TextField(
-                    controller: _controller,
-                    maxLines: 5,
-                    minLines: 1,
-                    decoration: InputDecoration(
-                        border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(20)),
-                        hintText: 'Type a message'),
-                    // onSubmitted: (_) => _sendTextMessage(),
-                  ),
-                ),
-                IconButton(
-                  icon: Icon(Icons.send),
-                  onPressed: _sendTextMessage,
-                ),
-              ],
-            ),
-          )
+          _buildMessageInput(),
         ],
+      ),
+    );
+  }
+
+  Widget _buildMessageBubble(Message message) {
+    final isMe = message.isMine;
+    final isAudio = message.isAudio;
+
+    return Align(
+      alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
+      child: Container(
+        margin: EdgeInsets.symmetric(vertical: 4),
+        padding: EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        decoration: BoxDecoration(
+          color: isMe ? Colors.blue : Colors.grey[300],
+          borderRadius: BorderRadius.only(
+            topLeft: Radius.circular(isMe ? 16 : 0),
+            topRight: Radius.circular(isMe ? 0 : 16),
+            bottomLeft: Radius.circular(16),
+            bottomRight: Radius.circular(16),
+          ),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (!isMe)
+              Text(
+                message.senderName,
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  color: Colors.black87,
+                ),
+              ),
+            SizedBox(height: 4),
+            isAudio
+                ? _buildAudioMessage(message)
+                : Text(
+                    message.text ?? '',
+                    style: TextStyle(
+                      color: isMe ? Colors.white : Colors.black87,
+                    ),
+                  ),
+            SizedBox(height: 4),
+            Text(
+              '${message.timestamp.hour}:${message.timestamp.minute.toString().padLeft(2, '0')}',
+              style: TextStyle(
+                fontSize: 12,
+                color: isMe ? Colors.white70 : Colors.black54,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
 
   Widget _buildAudioMessage(Message message) {
     final isPlaying = currentPlayingId == message.id;
+    final isMe = message.isMine;
+
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
         IconButton(
           icon: Icon(isPlaying ? Icons.stop : Icons.play_arrow),
+          color: isMe ? Colors.white : Colors.blue,
           onPressed: () {
             if (isPlaying) {
               _stopAudio();
@@ -246,13 +346,50 @@ class _ChatScreenState extends State<ChatScreen> {
             }
           },
         ),
-        Text('Voice message'),
-        SizedBox(width: 8),
         Text(
-          '${message.timestamp.hour}:${message.timestamp.minute.toString().padLeft(2, '0')}',
-          style: TextStyle(fontSize: 12),
+          'Voice message',
+          style: TextStyle(color: isMe ? Colors.white : Colors.black87),
         ),
       ],
+    );
+  }
+
+  Widget _buildMessageInput() {
+    return Container(
+      padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: Colors.grey[200],
+        border: Border(top: BorderSide(color: Colors.grey[300]!)),
+      ),
+      child: Row(
+        children: [
+          IconButton(
+            icon: Icon(isRecording ? Icons.stop : Icons.mic),
+            color: isRecording ? Colors.red : null,
+            onPressed: isRecording ? _stopRecording : _startRecording,
+          ),
+          Expanded(
+            child: TextField(
+              controller: _controller,
+              decoration: InputDecoration(
+                hintText: 'Type a message...',
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(24),
+                  borderSide: BorderSide.none,
+                ),
+                filled: true,
+                fillColor: Colors.white,
+                contentPadding: EdgeInsets.symmetric(horizontal: 16),
+              ),
+              onSubmitted: (_) => _sendTextMessage(),
+            ),
+          ),
+          IconButton(
+            icon: Icon(Icons.send),
+            onPressed: _sendTextMessage,
+          ),
+        ],
+      ),
     );
   }
 }
