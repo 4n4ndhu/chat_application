@@ -93,7 +93,7 @@ class SocketService {
       onWebrtcIceCandidate;
 
   final Uuid _uuid = const Uuid();
-  String serverUrl = "http://192.168.220.34:3000";
+  String serverUrl = "http://62.72.31.17:3005";
 
   void connect(
     String userName,

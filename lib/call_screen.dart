@@ -148,18 +148,18 @@ class _CallScreenState extends State<CallScreen> {
       print('[WebRTC] ✅ Track added to remote stream');
     };
 
-    // _peerConnection.onAddStream = (Stream) {
-    //   if (widget.isVideo && Stream.getAudioTracks().isNotEmpty) {
-    //     if (_remoteRenderer.srcObject != Stream) {
-    //       setState(() {
-    //         _remoteRenderer.srcObject = Stream;
-    //         _remoteStream = Stream;
-    //       });
-    //     } else if (Stream.getAudioTracks().isNotEmpty) {
-    //       print("DEBUG: remote audio stream recived via onAddStream");
-    //     }
-    //   }
-    // };
+    _peerConnection.onAddStream = (Stream) {
+      if (widget.isVideo && Stream.getAudioTracks().isNotEmpty) {
+        if (_remoteRenderer.srcObject != Stream) {
+          setState(() {
+            _remoteRenderer.srcObject = Stream;
+            _remoteStream = Stream;
+          });
+        } else if (Stream.getAudioTracks().isNotEmpty) {
+          print("DEBUG: remote audio stream recived via onAddStream");
+        }
+      }
+    };
   }
 
   Future<void> _getUserMedia() async {
