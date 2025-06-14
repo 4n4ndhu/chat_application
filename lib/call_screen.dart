@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:developer'; // For log() function
 import 'package:flutter/material.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'socket_service.dart';
@@ -30,7 +31,7 @@ class _CallScreenState extends State<CallScreen> {
   MediaStream? _remoteStream;
   bool _isConnected = false;
   bool _isMuted = false;
-  bool _isSpeakerOn = true;
+  // bool _isSpeakerOn = true;
   Timer? _callDurationTimer;
   Duration _callDuration = Duration.zero;
 
@@ -47,7 +48,6 @@ class _CallScreenState extends State<CallScreen> {
     _localRenderer.dispose();
     _remoteRenderer.dispose();
     _localStream?.dispose();
-
     _remoteStream?.dispose();
     _peerConnection.dispose();
     super.dispose();
@@ -60,10 +60,14 @@ class _CallScreenState extends State<CallScreen> {
 
   Future<void> _startCall() async {
     try {
+      print('[SocketDebug] Attempting to create PeerConnection...');
       await _createPeerConnection();
+      print(
+          '[SocketDebug] PeerConnection created. Setting up socket listeners...');
       _setupSocketListeners();
+      print('[SocketDebug] Socket listeners setup complete.');
 
-      await _getUserMedia();
+      await _getUserMedia(); // Capture media BEFORE offer/answer
 
       if (widget.isCaller) {
         final offer = await _peerConnection.createOffer();
@@ -72,34 +76,34 @@ class _CallScreenState extends State<CallScreen> {
           'sdp': offer.sdp,
           'type': offer.type,
         });
+        print('[SocketDebug] Caller: Sent WebRTC Offer.');
+      } else {
+        print('[SocketDebug] Callee: Waiting for WebRTC Offer...');
       }
 
-      // _setupSocketListeners();
       _startCallTimer();
     } catch (e) {
       print('Error starting call: $e');
       _hangUp();
       if (mounted) {
         ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text("failed to make call")));
+            .showSnackBar(SnackBar(content: Text("Failed to make call: $e")));
       }
     }
   }
 
   Future<void> _createPeerConnection() async {
-    const String EXPRESS_TURN_SERVER_ADDRESS = 'relay1.expressturn.com';
-    const int EXPRESS_TURN_PORT = 3480; // This is the port provided in your URL
-    const String EXPRESS_TURN_USERNAME = '000000002064816645';
-    const String EXPRESS_TURN_PASSWORD = '8onVM/nOnKT+gRs4Yh1N434S3Ao=';
     final configuration = {
       'iceServers': [
         {'urls': 'stun:stun.l.google.com:19302'},
         {'urls': 'stun:stun1.l.google.com:19302'},
         {'urls': 'stun:stun2.l.google.com:19302'},
+        // RE-ENABLE AND UPDATE WITH YOUR NEWEST TURN SERVER CREDENTIALS
         {
-          'urls': 'turn:$EXPRESS_TURN_SERVER_ADDRESS:$EXPRESS_TURN_PORT',
-          'username': EXPRESS_TURN_USERNAME,
-          'credential': EXPRESS_TURN_PASSWORD,
+          'urls':
+              'turn:relay1.expressturn.com:3480', // Example: 'turn:global.relay.metered.ca:80'
+          'username': '000000002065267973',
+          'credential': 'GKDX9jTiguQHTGYnHt464EGSJ8Y=',
         },
       ],
       'sdpSemantics': 'unified-plan',
@@ -119,49 +123,104 @@ class _CallScreenState extends State<CallScreen> {
     };
 
     _peerConnection.onIceConnectionState = (state) {
+      log('ICE Connection State Changed: $state', name: 'WebRTC Debug');
       if (state == RTCIceConnectionState.RTCIceConnectionStateConnected) {
         setState(() => _isConnected = true);
+        log('ICE Connection State: CONNECTED!', name: 'WebRTC Debug');
       } else if (state ==
-              RTCIceConnectionState.RTCIceConnectionStateDisconnected ||
-          state == RTCIceConnectionState.RTCIceConnectionStateFailed) {
-        _hangUp(endCallOnServer: false);
-      }
-    };
-
-    _peerConnection.onTrack = (event) async {
-      print('[WebRTC] onTrack: kind = ${event.track.kind}');
-
-      if (_remoteStream == null) {
-        _remoteStream = await createLocalMediaStream('remote');
-        _remoteStream?.addTrack(event.track);
-
-        setState(() {
-          _remoteRenderer.srcObject = _remoteStream;
-        });
-
-        print(
-            '[Renderer] Remote stream set. Tracks: ${_remoteStream?.getVideoTracks().length} video, ${_remoteStream?.getAudioTracks().length} audio');
+          RTCIceConnectionState.RTCIceConnectionStateCompleted) {
+        log('ICE Connection State: COMPLETED!', name: 'WebRTC Debug');
+      } else if (state ==
+          RTCIceConnectionState.RTCIceConnectionStateDisconnected) {
+        log('ICE Connection State: DISCONNECTED!', name: 'WebRTC Debug');
+        _hangUp(endCallOnServer: false); // Re-enabled hangup
+      } else if (state == RTCIceConnectionState.RTCIceConnectionStateFailed) {
+        log('ICE Connection State: FAILED!', name: 'WebRTC Debug');
+        _hangUp(endCallOnServer: false); // Re-enabled hangup
       } else {
-        _remoteStream?.addTrack(event.track);
+        log('ICE Connection State: Other state: $state', name: 'WebRTC Debug');
       }
-
-      print('[WebRTC] ✅ Track added to remote stream');
     };
 
-    _peerConnection.onAddStream = (Stream) {
-      if (widget.isVideo && Stream.getAudioTracks().isNotEmpty) {
-        if (_remoteRenderer.srcObject != Stream) {
+    // --- ENHANCED ONTRACK LISTENER ---
+    _peerConnection.onTrack = (event) async {
+      log('[WebRTC] onTrack: kind = ${event.track.kind}, event.streams.length = ${event.streams.length}, Track ID: ${event.track.id}, Track Enabled: ${event.track.enabled}');
+
+      if (event.streams.isNotEmpty) {
+        MediaStream remoteStream = event.streams[0];
+        print('[WebRTC Debug] onTrack: Remote Stream ID: ${remoteStream.id}');
+        print(
+            '[WebRTC Debug] onTrack: Remote Stream Video Tracks: ${remoteStream.getVideoTracks().length}');
+        print(
+            '[WebRTC Debug] onTrack: Remote Stream Audio Tracks: ${remoteStream.getAudioTracks().length}');
+
+        if (event.track.kind == 'video') {
           setState(() {
-            _remoteRenderer.srcObject = Stream;
-            _remoteStream = Stream;
+            _remoteRenderer.srcObject = remoteStream;
           });
-        } else if (Stream.getAudioTracks().isNotEmpty) {
-          print("DEBUG: remote audio stream recived via onAddStream");
+          log('[Renderer] Remote video stream set via onTrack. Stream ID: ${remoteStream.id}');
+          // ADDED: Print Remote Renderer Texture ID
+          print(
+              '[WebRTC Debug] Remote Renderer Texture ID (onTrack): ${_remoteRenderer.textureId}');
+          // ADDED: Force a UI rebuild after setting srcObject if mounted
+          if (mounted) {
+            setState(() {/* Rebuild UI */});
+            print('[WebRTC Debug] Forced UI rebuild after remote video set.');
+          }
+        } else if (event.track.kind == 'audio') {
+          log('[WebRTC Debug] Remote audio track received via onTrack. Track ID: ${event.track.id}. Enabled: ${event.track.enabled}');
         }
+
+        if (_remoteStream == null || _remoteStream!.id != remoteStream.id) {
+          _remoteStream = remoteStream;
+          log('[WebRTC] _remoteStream updated to incoming remote stream: ${remoteStream.id}');
+        }
+
+        // Detailed check for all tracks in the remote stream
+        remoteStream.getTracks().forEach((track) {
+          print(
+              '[WebRTC Debug] Remote Stream Track Detail: ${track.kind} - ${track.id}, Enabled: ${track.enabled}');
+        });
+      } else {
+        log('[WebRTC] onTrack event received with no streams!');
       }
     };
+    // --- END ENHANCED ONTRACK LISTENER ---
+
+    // --- ENHANCED ONADDSTREAM LISTENER ---
+    _peerConnection.onAddStream = (stream) {
+      print(
+          'DEBUG: onAddStream CALLED! Stream ID: ${stream.id}, Video Tracks: ${stream.getVideoTracks().length}, Audio Tracks: ${stream.getAudioTracks().length}');
+      if (widget.isVideo && stream.getVideoTracks().isNotEmpty) {
+        if (_remoteRenderer.srcObject != stream) {
+          setState(() {
+            _remoteRenderer.srcObject = stream;
+            _remoteStream = stream;
+          });
+          log("DEBUG: remote video stream set via onAddStream");
+        }
+      } else if (stream.getAudioTracks().isNotEmpty) {
+        log("DEBUG: remote audio stream received via onAddStream (no video)");
+      }
+      // Detailed check for all tracks in the stream
+      stream.getTracks().forEach((track) {
+        print(
+            '[WebRTC Debug] Remote Stream (onAddStream) Track Detail: ${track.kind} - ${track.id}, Enabled: ${track.enabled}');
+      });
+      // ADDED: Print Remote Renderer Texture ID in onAddStream
+      print(
+          '[WebRTC Debug] Remote Renderer Texture ID (onAddStream): ${_remoteRenderer.textureId}');
+      // ADDED: Force a UI rebuild after setting srcObject if mounted
+      if (mounted) {
+        setState(() {/* Rebuild UI */});
+        print(
+            '[WebRTC Debug] Forced UI rebuild after remote video set in onAddStream.');
+      }
+    };
+    // --- END ENHANCED ONADDSTREAM LISTENER ---
   }
 
+  // --- ENHANCED GETUSERMEDIA ---
   Future<void> _getUserMedia() async {
     try {
       _localStream = await navigator.mediaDevices.getUserMedia({
@@ -169,19 +228,37 @@ class _CallScreenState extends State<CallScreen> {
         'video': widget.isVideo,
       });
 
-      _localStream?.getTracks().forEach((track) {
-        _peerConnection.addTrack(track, _localStream!);
-      });
+      print('[WebRTC Debug] Local stream obtained. ID: ${_localStream?.id}');
+      if (_localStream != null) {
+        print(
+            '[WebRTC Debug] Local stream video tracks count: ${_localStream!.getVideoTracks().length}');
+        print(
+            '[WebRTC Debug] Local stream audio tracks count: ${_localStream!.getAudioTracks().length}');
+
+        _localStream!.getTracks().forEach((track) {
+          _peerConnection.addTrack(track, _localStream!);
+          print(
+              '[WebRTC Debug] Added local track to peer connection: ${track.kind} - ${track.id}, Enabled: ${track.enabled}');
+        });
+      }
 
       _localRenderer.srcObject = _localStream;
+      print('[WebRTC Debug] Local renderer srcObject set.');
+      // ADDED: Print Local Renderer Texture ID
+      print(
+          '[WebRTC Debug] Local Renderer Texture ID: ${_localRenderer.textureId}');
     } catch (e) {
       print('Error getting user media: $e');
-      throw e;
+      rethrow;
     }
   }
+  // --- END ENHANCED GETUSERMEDIA ---
 
   void _setupSocketListeners() {
+    print(
+        '[SocketDebug] Inside _setupSocketListeners. Registering onWebrtcOffer...');
     widget.socketService.onWebrtcOffer = ({required from, required sdp}) async {
+      print('[SocketDebug] onWebrtcOffer CALLED! From: ${from.name}');
       if (from.id == widget.otherUser.id) {
         print('[WebRTC Debug] Received WebRTC Offer from ${from.name}');
         await _peerConnection.setRemoteDescription(
@@ -191,7 +268,13 @@ class _CallScreenState extends State<CallScreen> {
 
         final answer = await _peerConnection.createAnswer();
         await _peerConnection.setLocalDescription(answer);
+
         print('[WebRTC Debug] Created and Set Local Description (Answer)');
+        print('Full SDP Type: ${answer.type}');
+        print('Full SDP Content (START):');
+        answer.sdp!.split('\n').forEach((line) => print(line));
+        print('Full SDP Content (END)');
+
         widget.socketService.sendWebrtcAnswer(widget.otherUser, {
           'sdp': answer.sdp,
           'type': answer.type,
@@ -202,6 +285,7 @@ class _CallScreenState extends State<CallScreen> {
 
     widget.socketService.onWebrtcAnswer =
         ({required from, required sdp}) async {
+      print('[SocketDebug] onWebrtcAnswer CALLED! From: ${from.name}');
       if (from.id == widget.otherUser.id) {
         print('[WebRTC Debug] Received WebRTC Answer from ${from.name}');
         await _peerConnection.setRemoteDescription(
@@ -213,6 +297,7 @@ class _CallScreenState extends State<CallScreen> {
 
     widget.socketService.onWebrtcIceCandidate =
         ({required from, required candidate}) async {
+      print('[SocketDebug] onWebrtcIceCandidate CALLED! From: ${from.name}');
       if (from.id == widget.otherUser.id) {
         print(
             '[WebRTC Debug] Received ICE Candidate from ${from.name}: ${candidate['candidate']}');
@@ -227,24 +312,15 @@ class _CallScreenState extends State<CallScreen> {
       }
     };
 
-    // widget.socketService.onCallEnded = (data) {
-    //   if (data['from'].id == widget.otherUser.id) {
-    //     _hangUp();
-    //   }
-    // };
-
     widget.socketService.onCallAccepted = (data) {
       final User fromUser = data['from'];
       if (fromUser.id == widget.otherUser.id) {
         print('DEBUG: CallScreen received call_accepted from ${fromUser.name}');
-        // No need to navigate here, as the caller is already in CallScreen
-        // and the connection process will start via WebRTC signaling.
       }
     };
 
     widget.socketService.onCallRejected = (data) {
-      final User fromUser = data[
-          'from']; // Now 'from' is already a User object from SocketService
+      final User fromUser = data['from'];
       if (fromUser.id == widget.otherUser.id) {
         print('DEBUG: Call rejected by ${fromUser.name}');
         if (mounted) {
@@ -256,17 +332,14 @@ class _CallScreenState extends State<CallScreen> {
     };
 
     widget.socketService.onCallEnded = (data) {
-      final User fromUser = data[
-          'from']; // Now 'from' is already a User object from SocketService
+      final User fromUser = data['from'];
       print('DEBUG: onCallEnded received. Data: $data');
       print(
           'DEBUG: From ID: ${fromUser.id}, Other User ID: ${widget.otherUser.id}');
       if (fromUser.id == widget.otherUser.id) {
         print(
             'DEBUG: onCallEnded match. Calling _hangUp(endCallOnServer: false)');
-        _hangUp(
-            endCallOnServer:
-                false); // Call hangUp without re-emitting to server
+        _hangUp(endCallOnServer: false);
       } else {
         print('DEBUG: onCallEnded mismatch or irrelevant sender.');
       }
@@ -286,9 +359,12 @@ class _CallScreenState extends State<CallScreen> {
       widget.socketService.endCall(widget.otherUser);
     }
     _callDurationTimer?.cancel();
+    // Dispose renderers and streams immediately upon hangup
     _localRenderer.dispose();
     _remoteRenderer.dispose();
     _localStream?.dispose();
+    _remoteStream?.dispose();
+    _peerConnection.dispose();
 
     if (mounted && Navigator.of(context).canPop()) {
       Navigator.pop(context);
@@ -300,11 +376,14 @@ class _CallScreenState extends State<CallScreen> {
     if (audioTracks != null && audioTracks.isNotEmpty) {
       audioTracks.first.enabled = !_isMuted;
       setState(() => _isMuted = !_isMuted);
+      print('[WebRTC Debug] Local audio muted: ${_isMuted}');
     }
   }
 
   void _toggleSpeaker() {
-    setState(() => _isSpeakerOn = !_isSpeakerOn);
+    // setState(() => _isSpeakerOn = !_isSpeakerOn); // Uncomment if you want the icon to change
+    print(
+        '[WebRTC Debug] Speaker toggle button pressed, but programmatic control is disabled.');
   }
 
   String _formatDuration(Duration duration) {
@@ -320,27 +399,56 @@ class _CallScreenState extends State<CallScreen> {
       backgroundColor: Colors.black,
       body: Stack(
         children: [
+          // Remote Video Renderer
           Positioned.fill(
-              child: widget.isVideo &&
-                      _remoteStream != null &&
-                      _remoteStream!.getVideoTracks().isNotEmpty &&
-                      _remoteRenderer.srcObject != null
-                  ? RTCVideoView(
+            // Always try to render remote if it's a video call and srcObject is present
+            child: widget.isVideo && _remoteRenderer.srcObject != null
+                ? Container(
+                    decoration: BoxDecoration(
+                        border: Border.all(color: Colors.yellow, width: 5)),
+                    child: RTCVideoView(
                       _remoteRenderer,
                       objectFit:
                           RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
-                    )
-                  : Container(
-                      color: Colors.black,
-                      child: Center(
-                        child: Text(
-                          _isConnected
-                              ? "connected: no video"
-                              : "connecting....",
-                          style: TextStyle(color: Colors.white, fontSize: 20),
-                        ),
+                    ),
+                  )
+                : Container(
+                    color: Colors.black, // Background when no remote video
+                    child: Center(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Text(
+                            _isConnected
+                                ? (widget.isVideo
+                                    ? "Connected: Remote video should be here"
+                                    : "Connected: Audio Call")
+                                : "Connecting...",
+                            style: TextStyle(color: Colors.white, fontSize: 20),
+                          ),
+                          SizedBox(height: 20),
+                          ElevatedButton(
+                            onPressed: () {
+                              print('--- Debug Renderers State ---');
+                              print(
+                                  'Local Renderer srcObject: ${_localRenderer.srcObject?.id}');
+                              print(
+                                  'Local Renderer Texture ID: ${_localRenderer.textureId}');
+                              print(
+                                  'Remote Renderer srcObject: ${_remoteRenderer.srcObject?.id}');
+                              print(
+                                  'Remote Renderer Texture ID: ${_remoteRenderer.textureId}');
+                              print('--- End Debug Renderers State ---');
+                              setState(() {});
+                            },
+                            child: Text('Debug Renderers'),
+                          ),
+                        ],
                       ),
-                    )),
+                    ),
+                  ),
+          ),
+          // Local Video Renderer (if video call)
           if (widget.isVideo)
             Positioned(
               right: 20,
@@ -349,7 +457,7 @@ class _CallScreenState extends State<CallScreen> {
               height: 160,
               child: Container(
                 decoration: BoxDecoration(
-                  border: Border.all(color: Colors.white),
+                  border: Border.all(color: Colors.white, width: 2),
                 ),
                 child: RTCVideoView(
                   _localRenderer,
@@ -396,10 +504,9 @@ class _CallScreenState extends State<CallScreen> {
                   size: 32,
                 ),
                 _buildCallControlButton(
-                  icon: _isSpeakerOn ? Icons.volume_up : Icons.volume_off,
-                  onPressed: _toggleSpeaker,
-                  color: _isSpeakerOn ? Colors.white : Colors.grey,
-                ),
+                    icon: Icons.volume_up,
+                    onPressed: _toggleSpeaker,
+                    color: Colors.white),
               ],
             ),
           ),

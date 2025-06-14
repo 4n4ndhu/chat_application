@@ -1,3 +1,5 @@
+import 'dart:developer';
+
 import 'package:socket_io_client/socket_io_client.dart' as IO;
 import 'package:uuid/uuid.dart';
 
@@ -93,11 +95,13 @@ class SocketService {
       onWebrtcIceCandidate;
 
   final Uuid _uuid = const Uuid();
-  String serverUrl = "http://62.72.31.17:3005";
+  String serverUrl = "http://192.168.45.180:3000";
 
   void connect(
     String userName,
   ) {
+    print(
+        '[SocketService] Attempting to connect to $serverUrl with username $userName');
     try {
       socket = IO.io(
         serverUrl,
@@ -110,114 +114,123 @@ class SocketService {
       );
 
       socket.onConnect((_) {
+        log('[SocketService] !!! SUCCESSFULLY CONNECTED !!! Socket ID: ${socket.id}');
         final socketId = socket.id;
         if (socketId != null) {
           currentUser = User(id: socketId, name: userName);
           socket.emit('join', currentUser.toJson());
+          log('[SocketService] Emitted "join" with user ID: ${currentUser.id}');
         }
       });
 
-      socket.on('user_list', (data) {
-        try {
-          final users = (data as List)
-              .map((u) => User.fromJson(u))
-              .where((u) => u.id != currentUser.id)
-              .toList();
-          onlineUsers = users;
-          onUserListUpdated?.call(users);
-        } catch (e) {
-          print('Error processing user_list: $e');
-        }
-      });
-
-      socket.on('private_message', (data) {
-        try {
-          final from = User.fromJson(data['from']);
-          final message = data['message'] as String?;
-          final audioBase64 = data['audioBase64'] as String?;
-          final messageId = data['id'] as String? ?? _uuid.v4();
-
-          _addMessage(
-            from.id,
-            Message(
-              senderName: from.name,
-              text: message,
-              audioBase64: audioBase64,
-              isMine: false,
-              id: messageId,
-            ),
-            markUnread: true,
-          );
-          onNewMessage?.call(from.id);
-        } catch (e) {
-          print('Error processing private_message: $e');
-        }
-      });
-
-      // Call related events
-      socket.on('incoming_call', (data) {
-        onIncomingCall?.call(data);
-        // if (onIncomingCall != null) {
-        //   onIncomingCall!(data);
-        // }
-      });
-
-      socket.on('call_accepted', (data) {
-        if (onCallAccepted != null) {
-          // onCallAccepted!(data);
-          onCallAccepted!({
-            'from': User.fromJson(data['from']),
-            // 'isVideo': data['isVideo']
-          });
-        }
-      });
-
-      socket.on('call_rejected', (data) {
-        if (onCallRejected != null) {
-          // onCallRejected!(data);
-          onCallRejected!({'from': User.fromJson(data['from'])});
-        }
-      });
-
-      socket.on('call_ended', (data) {
-        if (onCallEnded != null) {
-          // onCallEnded!(data);
-          onCallEnded!({'from': User.fromJson(data['from'])});
-        }
-      });
-
-      socket.on('webrtc_offer', (data) {
-        // onWebrtcOffer?.call(data);
-        if (onWebrtcOffer != null) {
-          onWebrtcOffer!(from: User.fromJson(data['from']), sdp: data['sdp']);
-        }
-      });
-
-      socket.on('webrtc_answer', (data) {
-        // onWebrtcAnswer?.call(data);
-        if (onWebrtcAnswer != null) {
-          onWebrtcAnswer!(from: User.fromJson(data['from']), sdp: data['sdp']);
-        }
-      });
-
-      socket.on('webrtc_ice_candidate', (data) {
-        // onWebrtcIceCandidate?.call(data);
-        if (onWebrtcIceCandidate != null) {
-          onWebrtcIceCandidate!(
-              from: User.fromJson(data['from']), candidate: data['candidate']);
-        }
-      });
+      socket.onAny(
+        (event, data) {
+          log('[SocketService] onAny : event: $event, Data: $data');
+        },
+      );
 
       socket.onDisconnect((_) {
         print('Disconnected from server');
       });
 
       socket.onError((error) {
-        print('Socket error: $error');
+        print('[SocketService] !!! GENERIC SOCKET ERROR !!!: $error');
       });
     } catch (e) {
       print('Error initializing socket: $e');
     }
+
+    socket.on('user_list', (data) {
+      print('[SocketService] Received user_list event: $data');
+      try {
+        final users = (data as List)
+            .map((u) => User.fromJson(u))
+            .where((u) => u.id != currentUser.id)
+            .toList();
+        onlineUsers = users;
+        onUserListUpdated?.call(users);
+      } catch (e) {
+        print('Error processing user_list: $e');
+      }
+    });
+
+    socket.on('private_message', (data) {
+      try {
+        final from = User.fromJson(data['from']);
+        final message = data['message'] as String?;
+        final audioBase64 = data['audioBase64'] as String?;
+        final messageId = data['id'] as String? ?? _uuid.v4();
+
+        _addMessage(
+          from.id,
+          Message(
+            senderName: from.name,
+            text: message,
+            audioBase64: audioBase64,
+            isMine: false,
+            id: messageId,
+          ),
+          markUnread: true,
+        );
+        onNewMessage?.call(from.id);
+      } catch (e) {
+        print('Error processing private_message: $e');
+      }
+    });
+
+    // Call related events
+    socket.on('incoming_call', (data) {
+      onIncomingCall?.call(data);
+      // if (onIncomingCall != null) {
+      //   onIncomingCall!(data);
+      // }
+    });
+
+    socket.on('call_accepted', (data) {
+      if (onCallAccepted != null) {
+        // onCallAccepted!(data);
+        onCallAccepted!({
+          'from': User.fromJson(data['from']),
+          // 'isVideo': data['isVideo']
+        });
+      }
+    });
+
+    socket.on('call_rejected', (data) {
+      if (onCallRejected != null) {
+        // onCallRejected!(data);
+        onCallRejected!({'from': User.fromJson(data['from'])});
+      }
+    });
+
+    socket.on('call_ended', (data) {
+      if (onCallEnded != null) {
+        // onCallEnded!(data);
+        onCallEnded!({'from': User.fromJson(data['from'])});
+      }
+    });
+
+    socket.on('webrtc_offer', (data) {
+      // onWebrtcOffer?.call(data);
+      if (onWebrtcOffer != null) {
+        onWebrtcOffer!(from: User.fromJson(data['from']), sdp: data['sdp']);
+      }
+    });
+
+    socket.on('webrtc_answer', (data) {
+      // onWebrtcAnswer?.call(data);
+      if (onWebrtcAnswer != null) {
+        onWebrtcAnswer!(from: User.fromJson(data['from']), sdp: data['sdp']);
+      }
+    });
+
+    socket.on('webrtc_ice_candidate', (data) {
+      // onWebrtcIceCandidate?.call(data);
+      if (onWebrtcIceCandidate != null) {
+        onWebrtcIceCandidate!(
+            from: User.fromJson(data['from']), candidate: data['candidate']);
+      }
+    });
   }
 
   void _addMessage(String userId, Message message, {bool markUnread = true}) {
@@ -280,9 +293,10 @@ class SocketService {
   //   });
   // }
   void initiateCall(User toUser, bool isVideo) {
+    log('[SocketService] Emitting call_initiate to user ID: ${toUser.id}, isVideo: $isVideo');
     socket.emit('call_initiate', {
       'to': _userToJson(toUser),
-      'from': _userToJson(currentUser!),
+      'from': _userToJson(currentUser),
       'isVideo': isVideo
     });
   }
@@ -294,8 +308,9 @@ class SocketService {
   //   });
   // }
   void acceptCall(User toUser) {
+    log('[SocketService] Emitting call_accept to user ID: ${toUser.id}');
     socket.emit('call_accept',
-        {'to': _userToJson(toUser), 'from': _userToJson(currentUser!)});
+        {'to': _userToJson(toUser), 'from': _userToJson(currentUser)});
   }
 
   // void rejectCall(User to) {
@@ -305,8 +320,10 @@ class SocketService {
   //   });
   // }
   void rejectCall(User toUser) {
+    log('[SocketService] Emitting call_reject to user ID: ${toUser.id}');
+
     socket.emit('call_reject',
-        {'to': _userToJson(toUser), 'from': _userToJson(currentUser!)});
+        {'to': _userToJson(toUser), 'from': _userToJson(currentUser)});
   }
 
   // void endCall(User to) {
@@ -316,8 +333,9 @@ class SocketService {
   //   });
   // }
   void endCall(User toUser) {
+    log('[SocketService] Emitting call_end to user ID: ${toUser.id}');
     socket.emit('call_end',
-        {'to': _userToJson(toUser), 'from': _userToJson(currentUser!)});
+        {'to': _userToJson(toUser), 'from': _userToJson(currentUser)});
   }
 
   // void sendWebrtcOffer(User to, Map<String, dynamic> sdp) {
@@ -328,7 +346,22 @@ class SocketService {
   // }
 
   void sendWebrtcOffer(User toUser, Map<String, dynamic> sdp) {
-    socket.emit('webrtc_offer', {'to': _userToJson(toUser), 'sdp': sdp});
+    print('[SocketService] Preparing to emit webrtc_offer.');
+
+    // This is the full payload we are sending.
+    // We expect currentUser to be non-null due to 'late' keyword.
+    final payload = {
+      'to': _userToJson(toUser),
+      'from':
+          _userToJson(currentUser), // CRITICAL: This is where 'from' is added
+      'sdp': sdp
+    };
+
+    // Print the EXACT payload before emitting to verify 'from' field
+    print('[SocketService] Webrtc_offer payload: $payload');
+
+    socket.emit('webrtc_offer', payload); // Emit the prepared payload
+    print('[SocketService] Emitted webrtc_offer.');
   }
 
   // void sendWebrtcAnswer(User to, Map<String, dynamic> sdp) {
@@ -339,7 +372,15 @@ class SocketService {
   // }
 
   void sendWebrtcAnswer(User toUser, Map<String, dynamic> sdp) {
-    socket.emit('webrtc_answer', {'to': _userToJson(toUser), 'sdp': sdp});
+    print('[SocketService] Preparing to emit webrtc_answer.');
+    final payload = {
+      'to': _userToJson(toUser),
+      'from': _userToJson(currentUser),
+      'sdp': sdp
+    };
+    print('[SocketService] Webrtc_answer payload: $payload');
+    socket.emit('webrtc_answer', payload);
+    print('[SocketService] Emitted webrtc_answer.');
   }
 
   // void sendIceCandidate(User to, Map<String, dynamic> candidate) {
@@ -349,8 +390,15 @@ class SocketService {
   //   });
   // }
   void sendIceCandidate(User toUser, Map<String, dynamic> candidate) {
-    socket.emit('webrtc_ice_candidate',
-        {'to': _userToJson(toUser), 'candidate': candidate});
+    print('[SocketService] Preparing to emit webrtc_ice_candidate.');
+    final payload = {
+      'to': _userToJson(toUser),
+      'from': _userToJson(currentUser),
+      'candidate': candidate
+    };
+    print('[SocketService] Webrtc_ice_candidate payload: $payload');
+    socket.emit('webrtc_ice_candidate', payload);
+    print('[SocketService] Emitted webrtc_ice_candidate.');
   }
 
   void dispose() {
